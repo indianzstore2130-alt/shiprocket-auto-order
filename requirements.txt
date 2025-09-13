@@ -2,3 +2,4 @@ fastapi
 uvicorn
 razorpay
 requests
+setuptools
