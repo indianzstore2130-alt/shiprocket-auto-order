@@ -1,83 +1,53 @@
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 import razorpay
-import requests
 import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = FastAPI()
 
-# Razorpay keys (from Render env)
-RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
-RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
-
-# Shiprocket credentials (from Render env)
-SHIPROCKET_EMAIL = os.getenv("SHIPROCKET_EMAIL")
-SHIPROCKET_PASSWORD = os.getenv("SHIPROCKET_PASSWORD")
-
-razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+# Razorpay client setup
+razorpay_client = razorpay.Client(
+    auth=(os.getenv("RAZORPAY_KEY_ID"), os.getenv("RAZORPAY_KEY_SECRET"))
+)
 
 
-# ✅ Generate Razorpay Order (called by frontend before checkout)
+@app.get("/")
+async def root():
+    return {"message": "Razorpay FastAPI backend is running 🚀"}
+
+
 @app.post("/create-order")
-async def create_order(data: dict):
-    amount = data["amount"]  # in INR
-    receipt_id = data.get("receipt", "receipt#1")
+async def create_order(request: Request):
+    data = await request.json()
+    amount = data.get("amount", 500)  # Default 500 paise = ₹5.00
 
-    order = razorpay_client.order.create({
-        "amount": amount * 100,  # Razorpay expects paise
-        "currency": "INR",
-        "receipt": receipt_id,
-        "payment_capture": 1
-    })
+    try:
+        order = razorpay_client.order.create({
+            "amount": amount,
+            "currency": "INR",
+            "payment_capture": 1
+        })
+        return JSONResponse(content=order)
 
-    return {"order_id": order["id"], "amount": amount}
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-# ✅ Razorpay Payment Success Webhook → Push to Shiprocket
 @app.post("/razorpay-webhook")
 async def razorpay_webhook(request: Request):
-    body = await request.json()
+    body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature")
 
-    payment_id = body.get("razorpay_payment_id")
-    order_id = body.get("razorpay_order_id")
-    customer_name = body.get("name")
-    customer_email = body.get("email")
-    customer_phone = body.get("phone")
+    try:
+        # Webhook secret should match the one in Razorpay Dashboard
+        webhook_secret = os.getenv("RAZORPAY_WEBHOOK_SECRET")
+        razorpay_client.utility.verify_webhook_signature(body, signature, webhook_secret)
 
-    # 🔑 Authenticate Shiprocket
-    login_url = "https://apiv2.shiprocket.in/v1/external/auth/login"
-    login_payload = {"email": SHIPROCKET_EMAIL, "password": SHIPROCKET_PASSWORD}
-    login_res = requests.post(login_url, json=login_payload).json()
-    token = login_res.get("token")
+        return {"status": "Webhook verified ✅"}
 
-    # 🚚 Create Shiprocket Order
-    headers = {"Authorization": f"Bearer {token}"}
-    order_payload = {
-        "order_id": order_id,
-        "order_date": "2025-09-13",
-        "pickup_location": "Primary",
-        "channel_id": "",
-        "billing_customer_name": customer_name,
-        "billing_last_name": "",
-        "billing_address": "Test Address",
-        "billing_city": "Bangalore",
-        "billing_pincode": "560001",
-        "billing_state": "Karnataka",
-        "billing_country": "India",
-        "billing_email": customer_email,
-        "billing_phone": customer_phone,
-        "order_items": [
-            {"name": "Test Product", "sku": "sku001", "units": 1, "selling_price": "500"}
-        ],
-        "payment_method": "Prepaid",
-        "sub_total": 500,
-        "length": 10,
-        "breadth": 15,
-        "height": 20,
-        "weight": 2.5
-    }
-    order_res = requests.post(
-        "https://apiv2.shiprocket.in/v1/external/orders/create/adhoc",
-        headers=headers, json=order_payload
-    ).json()
-
-    return {"status": "success", "shiprocket_response": order_res}
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=400)

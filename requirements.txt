@@ -1,5 +1,6 @@
-fastapi
-uvicorn
-razorpay
-requests
-setuptools
+fastapi==0.110.2
+uvicorn==0.30.1
+razorpay==1.4.2
+requests==2.32.3
+python-dotenv==1.0.1
+setuptools==70.0.0
